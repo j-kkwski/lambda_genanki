@@ -4,16 +4,28 @@ import genanki
 import random
 import tempfile
 import os
+from botocore.config import Config
 
-# Replace with your S3 bucket name
+# Environment variables
 BUCKET_NAME = os.environ.get('S3_BUCKET_NAME', 'YOUR_BUCKET_NAME')
+REGION = os.environ.get('AWS_REGION', 'eu-north-1')
 
-s3 = boto3.client('s3')
+# Configure S3 client with v4 signing
+s3 = boto3.client(
+    's3',
+    region_name=REGION,
+    config=Config(signature_version='s3v4')
+)
 
 def lambda_handler(event, context):
     try:
-        # Parse JSON input
-        body = json.loads(event['body'])
+        # Handle input body (can be str or dict)
+        raw_body = event.get('body')
+        if isinstance(raw_body, str):
+            body = json.loads(raw_body)
+        else:
+            body = raw_body
+
         deck_name = body.get('deck_name', 'AI Flashcards')
         cards = body['cards']  # list of {"question": "...", "answer": "..."}
 
@@ -47,8 +59,13 @@ def lambda_handler(event, context):
             genanki.Package(deck).write_to_file(tmp.name)
             tmp_path = tmp.name
 
-        # Upload to S3
+        # Define S3 key (safe: replace spaces with underscores)
         key = f"{deck_name.replace(' ', '_')}_{deck_id}.apkg"
+
+        # Debug log
+        print(f"DEBUG: Uploading to bucket={BUCKET_NAME}, key={key}")
+
+        # Upload to S3
         s3.upload_file(tmp_path, BUCKET_NAME, key)
 
         # Generate presigned URL (valid 1 hour)
@@ -65,6 +82,7 @@ def lambda_handler(event, context):
         }
 
     except Exception as e:
+        print("ERROR:", str(e))
         return {
             'statusCode': 500,
             'body': json.dumps({'error': str(e)})
